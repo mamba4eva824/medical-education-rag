@@ -30,8 +30,9 @@ Before starting work, check which phase we're in by looking at what exists:
 **Conventions:**
 - `MedQuADLoader.load()` returns `(documents, eval_pairs, test_pairs)` — 500 eval + 200 test held-out Q&A pairs
 - Chunk metadata schema: `{chunk_id, text, question, qtype, source, chunk_index, total_chunks}`
-- Chunking strategy: answers ≤1000 chars → single chunk with full Q&A; >1000 chars → split at paragraphs
-- Chunk IDs are MD5 hashes: `hashlib.md5(text.encode()).hexdigest()[:12]`
+- Chunking strategy: all chunks have format `"Q: {question}\n\nA: {answer_or_fragment}"`; answers ≤800 chars → single chunk; >800 chars → split answer at 800 chars then prepend question prefix to each
+- Default max_chunk_size=800 (answer portion), leaving room for question prefix under model token limits
+- Chunk IDs are MD5 hashes: `hashlib.md5((question + text).encode()).hexdigest()[:12]`
 - Save chunks to `data/processed/medical_chunks.parquet`
 - Save eval pairs to `data/processed/eval_queries.parquet`
 - Save test pairs to `data/processed/test_queries.parquet` (held out for final unbiased metrics only)
