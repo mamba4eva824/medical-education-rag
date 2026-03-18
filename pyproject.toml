@@ -13,7 +13,7 @@ dependencies = [
     "pandas>=2.2.0",
 
     # Vector store & search
-    "chromadb>=0.5.0",
+    "pinecone>=5.0.0",
     "rank-bm25>=0.2.2",
 
     # LLM clients

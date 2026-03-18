@@ -6,10 +6,10 @@ Job Responsibility: Evaluate vendor versus open-source AI products
 based on performance, cost, and reliability
 
 Validates:
-- Vector store (ChromaDB wrapper)
+- Vector store (Pinecone serverless wrapper)
 - Content recommender
 - Embedding comparison MLflow experiments
-- ChromaDB persistence
+- Pinecone index populated
 """
 
 import sys
@@ -51,7 +51,7 @@ class Phase2Agent(PhaseAgent):
         # --- Functional checks ---
         self.check("VectorStore has required methods", self._test_vector_store_interface)
         self.check("ContentRecommender has required methods", self._test_recommender_interface)
-        self.check("ChromaDB persistence directory exists", self._test_chroma_persistence)
+        self.check("Pinecone index is accessible", self._test_pinecone_index)
         self.check("MLflow runs exist for embedding comparison", self._test_mlflow_runs)
 
     def _test_vector_store_interface(self) -> tuple[bool, str]:
@@ -76,11 +76,25 @@ class Phase2Agent(PhaseAgent):
         except Exception as e:
             return False, str(e)
 
-    def _test_chroma_persistence(self) -> tuple[bool, str]:
-        chroma_dir = self.project_root / "chroma_db"
-        if chroma_dir.exists() and any(chroma_dir.iterdir()):
-            return True, f"ChromaDB data found at {chroma_dir}"
-        return False, "No ChromaDB data — run notebook 02b to build the index"
+    def _test_pinecone_index(self) -> tuple[bool, str]:
+        try:
+            import os
+            api_key = os.getenv('PINECONE_API_KEY')
+            if not api_key:
+                return False, "PINECONE_API_KEY not set in environment"
+            from pinecone import Pinecone
+            pc = Pinecone(api_key=api_key)
+            indexes = pc.list_indexes().names()
+            if 'medical-education-chunks' in indexes:
+                index = pc.Index('medical-education-chunks')
+                stats = index.describe_index_stats()
+                count = stats.get('total_vector_count', 0)
+                if count > 0:
+                    return True, f"Pinecone index has {count} vectors"
+                return False, "Pinecone index exists but is empty"
+            return False, "Index 'medical-education-chunks' not found in Pinecone"
+        except Exception as e:
+            return False, str(e)
 
     def _test_mlflow_runs(self) -> tuple[bool, str]:
         try:

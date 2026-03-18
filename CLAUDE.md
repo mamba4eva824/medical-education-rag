@@ -46,7 +46,7 @@ Before starting work, check which phase we're in by looking at what exists:
 **Job Responsibility:** Evaluate vendor versus open-source AI products based on performance, cost, and reliability
 
 **Files to create:**
-- `src/embeddings/vector_store.py` — ChromaDB PersistentClient wrapper
+- `src/embeddings/vector_store.py` — Pinecone serverless index wrapper
 - `src/embeddings/recommender.py` — ContentRecommender using same embedding infra
 - `notebooks/02_embedding_comparison.ipynb` — Compare 3 HuggingFace models with MLflow
 - `notebooks/02b_build_vector_store.ipynb` — Build production index
@@ -61,7 +61,8 @@ Before starting work, check which phase we're in by looking at what exists:
 - Experiment name: `embedding_comparison`
 - Log params: model name, type, size, embedding_dim
 - Log metrics: precision_at_5, mrr, encoding_time_sec
-- ChromaDB persist dir: `./chroma_db/`
+- Pinecone index name: `medical-education-chunks`
+- Pinecone API key loaded from `PINECONE_API_KEY` env var
 
 **Validation agent:** Run `python agents/phase2_embeddings.py` to verify vector store and MLflow runs.
 

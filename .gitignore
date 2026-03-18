@@ -23,8 +23,6 @@ data/raw/*.parquet
 data/processed/*.csv
 data/exports/*.csv
 
-# ChromaDB
-chroma_db/
 
 # IDE
 .vscode/

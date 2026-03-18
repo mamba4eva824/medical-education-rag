@@ -171,7 +171,7 @@ models_to_test = {
 **What to implement:**
 1. Load each model via `SentenceTransformer(model_name)` — auto-downloads from HF
 2. Encode all chunks, measure encoding time
-3. Build a ChromaDB collection per model
+3. Build a Pinecone namespace per model (or separate indexes)
 4. Run test queries (prepare 20-30 medical questions)
 5. Compute retrieval metrics: **Precision@5**, **MRR** (Mean Reciprocal Rank)
 6. Log everything to MLflow:
@@ -187,26 +187,35 @@ models_to_test = {
 
 **Interview talking point:** "PubMedBert outperformed general models on medical queries because it was pre-trained on PubMed abstracts — domain-specific models matter when your data has specialized vocabulary."
 
-### Step 2B: ChromaDB Vector Store
+### Step 2B: Pinecone Vector Store
 
 **File: `src/embeddings/vector_store.py`**
 
 **What to implement:**
-- `VectorStore` class wrapping ChromaDB
-- `build_index(chunks, model_name)` — encodes and inserts all chunks
+- `VectorStore` class wrapping Pinecone serverless
+- `build_index(chunks, model_name)` — encodes and upserts all chunks in batches
 - `search(query, n_results, specialty_filter)` — semantic search with optional metadata filtering
-- Persistent storage to `./chroma_db/` directory
+- Index name: `medical-education-chunks`
 
 ```python
-import chromadb
+from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
+import os
 
 class VectorStore:
     def __init__(self, model_name='pritamdeka/S-PubMedBert-MS-MARCO',
-                 persist_dir='./chroma_db'):
+                 index_name='medical-education-chunks'):
         self.model = SentenceTransformer(model_name)
-        self.client = chromadb.PersistentClient(path=persist_dir)
-        self.collection = self.client.get_or_create_collection('medical_chunks')
+        self.pc = Pinecone(api_key=os.getenv('PINECONE_API_KEY'))
+        self.index_name = index_name
+        if index_name not in self.pc.list_indexes().names():
+            self.pc.create_index(
+                name=index_name,
+                dimension=self.model.get_sentence_embedding_dimension(),
+                metric='cosine',
+                spec=ServerlessSpec(cloud='aws', region='us-east-1'),
+            )
+        self.index = self.pc.Index(index_name)
 ```
 
 ### Step 2C: Content Recommendation Engine
@@ -228,16 +237,16 @@ class VectorStore:
 
 Notebook that:
 1. Loads processed chunks from Parquet
-2. Builds the ChromaDB index using the best embedding model (likely PubMedBert)
+2. Builds the Pinecone index using the best embedding model (likely PubMedBert)
 3. Runs a few test searches to verify
 4. Tests the content recommender
 
 **Deliverables after Week 2:**
 - [ ] `notebooks/02_embedding_comparison.ipynb` — model comparison with MLflow
-- [ ] `src/embeddings/vector_store.py` — ChromaDB wrapper
+- [ ] `src/embeddings/vector_store.py` — Pinecone wrapper
 - [ ] `src/embeddings/recommender.py` — content recommendation engine
 - [ ] `notebooks/02b_build_vector_store.ipynb` — index building notebook
-- [ ] `chroma_db/` — persisted vector store
+- [ ] Pinecone index `medical-education-chunks` populated
 - [ ] MLflow runs visible in `mlruns/` (run `mlflow ui --port 5000` to view)
 - [ ] Git commit with all Week 2 code
 
@@ -314,7 +323,7 @@ Combines sparse (BM25) and dense (vector) retrieval using Reciprocal Rank Fusion
 
 **What to implement:**
 - `HybridSearcher` class
-- `search(query, top_k)` — runs both BM25 and ChromaDB, fuses with RRF
+- `search(query, top_k)` — runs both BM25 and Pinecone, fuses with RRF
 - `_rrf_combine()` — merges ranked lists with formula: `score = Σ 1/(k + rank)`
 
 ### Step 3E: LLM-Powered Query Expansion
@@ -602,7 +611,7 @@ Run tests: `pytest tests/ -v`
 | MLflow experiments | **Yes** | Shows Databricks MLflow UI |
 | Model Registry entry | **Yes** | Shows MLOps workflow on their platform |
 | Results dashboard | **Yes** | Shows stakeholder communication |
-| ChromaDB / FastAPI | **No** | Explain constraints; mention Databricks equivalents |
+| Pinecone / FastAPI | **No** | Pinecone is already cloud-hosted; mention Model Serving for API |
 
 ### Step 5A: Export Data for Upload
 
@@ -700,7 +709,7 @@ medical-education-rag/
 │   │   └── chunker.py                     # Q&A-aware adaptive chunking
 │   │
 │   ├── embeddings/
-│   │   ├── vector_store.py                # ChromaDB wrapper
+│   │   ├── vector_store.py                # Pinecone serverless wrapper
 │   │   └── recommender.py                 # Content recommendation engine
 │   │
 │   ├── retrieval/
@@ -726,7 +735,7 @@ medical-education-rag/
 ├── notebooks/
 │   ├── 01_data_ingestion.ipynb            # Data loading + chunking pipeline
 │   ├── 02_embedding_comparison.ipynb      # Model comparison with MLflow
-│   ├── 02b_build_vector_store.ipynb       # Build ChromaDB index
+│   ├── 02b_build_vector_store.ipynb       # Build Pinecone index
 │   ├── 03_retrieval_experiments.ipynb     # Retrieval strategy comparison
 │   ├── 04_export_for_databricks.ipynb     # Export data for Databricks upload
 │   ├── 05_predictive_model.ipynb          # At-risk model + SHAP
@@ -759,7 +768,7 @@ medical-education-rag/
 
 | Responsibility | What You Built | Key Files |
 |---------------|----------------|-----------|
-| Semantic search, content recommendations, LLM tools | ChromaDB search + ContentRecommender + RAG Q&A | `vector_store.py`, `recommender.py`, `rag_chain.py` |
+| Semantic search, content recommendations, LLM tools | Pinecone search + ContentRecommender + RAG Q&A | `vector_store.py`, `recommender.py`, `rag_chain.py` |
 | RAG architectures, agentic workflows, prompt engineering | Full RAG chain with query expansion + 3 prompts | `rag_chain.py`, `query_expander.py`, `prompts.py` |
 | Backend services and APIs | FastAPI with /ask, /recommend, /health | `main.py`, `models.py` |
 | Evaluate vendor vs open-source | MLflow experiment: 3 embedding models compared | `02_embedding_comparison.ipynb` |

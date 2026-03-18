@@ -146,7 +146,7 @@ The Phase 1 validation agent (`agents/phase1_ingestion.py`) runs 13 automated ch
 
 Phase 1's output feeds directly into Phase 2: Embeddings, Vector Store & Recommendations.
 
-- The 30,198 chunks will be encoded by 3 embedding models (MiniLM, MPNet, PubMedBert) and indexed in ChromaDB
+- The 30,198 chunks will be encoded by 3 embedding models (MiniLM, MPNet, PubMedBert) and indexed in Pinecone
 - The 500 eval pairs provide ground truth for comparing embedding model retrieval quality
 - The `question` metadata on every chunk enables hybrid search strategies (match against both question and answer text)
 - MLflow will track all embedding experiments for the vendor vs. open-source evaluation story
@@ -213,4 +213,4 @@ Phase 1's output feeds directly into Phase 2: Embeddings, Vector Store & Recomme
 > "The chunker is designed for extensibility. `chunk_medquad()` handles Q&A pairs. I'd add `chunk_lecture()`, `chunk_assessment()`, `chunk_clinical_case()` methods — each with structure-aware splitting appropriate to that content type. The output schema stays the same: `{chunk_id, text, metadata...}`. Downstream retrieval doesn't need to know what kind of content it's searching."
 
 **"How does this scale?"**
-> "MedQuAD is 16K pairs. VSTAR might have 100K+ content items. The pipeline processes MedQuAD in under 30 seconds locally. At 100K items, we'd batch-process in Databricks using Spark, partition the Parquet output by specialty, and use a managed vector database instead of local ChromaDB. The architecture doesn't change — just the infrastructure under it."
+> "MedQuAD is 16K pairs. VSTAR might have 100K+ content items. The pipeline processes MedQuAD in under 30 seconds locally. At 100K items, we'd batch-process in Databricks using Spark, partition the Parquet output by specialty, and scale the Pinecone index — serverless scales automatically. The architecture doesn't change — just the data volume."
