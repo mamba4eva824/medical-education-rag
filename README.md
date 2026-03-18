@@ -11,7 +11,7 @@ The system ingests authoritative medical Q&A content, chunks it for semantic ret
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 1 | Data Ingestion and Chunking | Complete |
-| 2 | Embeddings, Vector Store, and Recommendations | Planned |
+| 2 | Embeddings, Vector Store, and Recommendations | Complete |
 | 3 | RAG Architecture, Retrieval ML, and API | Planned |
 | 4 | Guardrails, Predictive Models, and Tests | Planned |
 | 5 | Databricks Porting | Planned |
@@ -52,6 +52,23 @@ MedQuAD (NIH)                 Embedding Models              LLM (Groq/Claude)
 - Chunk IDs are deterministic MD5 hashes of question + text, ensuring reproducibility across runs
 - Every chunk carries its original question as metadata, enabling hybrid retrieval against both question and answer text
 
+### Phase 2: Embeddings, Vector Store, and Recommendations
+
+**Embedding models evaluated:** Three HuggingFace models compared using local cosine similarity on a 2,000-chunk sample, with metrics logged to MLflow.
+
+| Model | P@5 | MRR | Encoding Time | Dimensions |
+|-------|-----|-----|---------------|------------|
+| all-MiniLM-L6-v2 | 0.070 | 0.117 | 6.4s | 384 |
+| pritamdeka/S-PubMedBert-MS-MARCO | 0.062 | 0.126 | 21.3s | 768 |
+| all-mpnet-base-v2 | 0.090 | 0.169 | 183.7s | 768 |
+
+**Vector store:** PubMedBert selected for domain specialization in medical content. 10,763 vectors indexed in Pinecone serverless (30% sample, cosine metric).
+
+**Components built:**
+- `VectorStore` -- Pinecone wrapper with batch upsert, retry logic, and post-upsert count verification
+- `ContentRecommender` -- similarity search and personalized study path recommendations
+- MLflow experiment tracking with 3 model comparison runs
+
 ---
 
 ## Project Structure
@@ -62,7 +79,9 @@ medical-education-rag/
 |   |-- ingestion/
 |   |   |-- medical_loader.py       # MedQuAD loader with 3-way stratified split
 |   |   |-- chunker.py              # Q&A-aware adaptive chunking
-|   |-- embeddings/                  # Phase 2: vector store, recommender
+|   |-- embeddings/
+|   |   |-- vector_store.py         # Pinecone serverless wrapper
+|   |   |-- recommender.py          # Content recommendation engine
 |   |-- retrieval/                   # Phase 3: reranker, hybrid search, query expansion
 |   |-- generation/                  # Phase 3-4: RAG chain, prompts, guardrails
 |   |-- prediction/                  # Phase 4: at-risk learner model
@@ -70,9 +89,13 @@ medical-education-rag/
 |
 |-- notebooks/
 |   |-- 01_data_ingestion.ipynb      # Data loading and chunking pipeline
+|   |-- 02_embedding_comparison.ipynb  # Model comparison with MLflow
+|   |-- 02b_build_vector_store.ipynb   # Build Pinecone index
 |
 |-- scripts/
-|   |-- run_ingestion.py             # CLI pipeline automation
+|   |-- run_ingestion.py             # Data ingestion automation
+|   |-- run_embedding_comparison.py  # Embedding model evaluation
+|   |-- run_build_index.py           # Pinecone index builder
 |
 |-- agents/                          # Phase validation agents and workflow prompts
 |-- commands/                        # Claude Code slash commands (GSD, RALF)
@@ -133,6 +156,9 @@ Each phase has an automated validation agent:
 ```bash
 # Check Phase 1 (13 checks)
 python agents/phase1_ingestion.py
+
+# Check Phase 2 (9 checks)
+python agents/phase2_embeddings.py
 
 # Check all phases
 python agents/run_all.py
