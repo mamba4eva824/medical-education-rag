@@ -12,8 +12,8 @@ The system ingests authoritative medical Q&A content, chunks it for semantic ret
 |-------|-------------|--------|
 | 1 | Data Ingestion and Chunking | Complete |
 | 2 | Embeddings, Vector Store, and Recommendations | Complete |
-| 3 | RAG Architecture, Retrieval ML, and API | Planned |
-| 4 | Guardrails, Predictive Models, and Tests | Planned |
+| 3 | RAG Architecture, Retrieval ML, and API | Complete |
+| 4 | Guardrails, Predictive Models, and Tests | Complete |
 | 5 | Databricks Porting | Planned |
 
 ---
@@ -69,6 +69,48 @@ MedQuAD (NIH)                 Embedding Models              LLM (Groq/Claude)
 - `ContentRecommender` -- similarity search and personalized study path recommendations
 - MLflow experiment tracking with 3 model comparison runs
 
+### Phase 3: RAG Architecture, Retrieval, and API
+
+**Pipeline:** End-to-end retrieval-augmented generation with query expansion, hybrid search, cross-encoder reranking, and citation-backed answer generation.
+
+**Retrieval strategy:**
+- Query expansion via Claude Haiku generates 3 alternative phrasings per question
+- Hybrid search combines BM25 (keyword) + Pinecone (semantic) with Reciprocal Rank Fusion (k=60)
+- Cross-encoder reranker (`ms-marco-MiniLM-L-6-v2`) narrows ~40 candidates to top 5
+- Quality predictor estimates retrieval relevance from 5 lightweight features
+
+**Generation:**
+- Claude Haiku 4.5 generates answers with numbered citations referencing retrieved sources
+- Three prompt templates: education Q&A, study guide, summarization
+- Validation layer checks citations, scope, and source grounding
+
+**API:**
+- FastAPI with `/ask`, `/recommend`, and `/health` endpoints
+- Pydantic request/response schemas with auto-generated OpenAPI docs
+- All responses include `latency_ms` for monitoring
+
+### Phase 4: Guardrails, Predictive Models, and Tests
+
+**Guardrails:** Five independent safety checks on every generated response:
+
+| Check | Purpose |
+|-------|---------|
+| `not_empty` | Response has substance |
+| `has_citations` | References numbered sources |
+| `within_scope` | No prohibited medical advice (8 blocked phrases) |
+| `source_grounded` | Per-citation sentence has 30% token overlap with source |
+| `no_hallucinated_citations` | No references beyond actual source count |
+
+**Predictive models:**
+- **At-risk learner classifier** — GradientBoostingClassifier (StandardScaler pipeline) trained on synthetic engagement data (500 students, 6 features). SHAP explanations show per-feature contributions for stakeholder trust.
+- **Retrieval quality predictor** — GradientBoostingRegressor trained via cross-encoder distillation (~10K examples). Predicts relevance in <1ms vs ~200ms for the full cross-encoder.
+
+**Monitoring:** `QueryMetrics` dataclass tracks latency, guardrail pass rates, and empty response rates for production alerting.
+
+**Test suite:** 32 pytest tests across 4 files — guardrails (15), API endpoints (8), quality predictor (5), reranker (4). All tests run offline with mocked external services.
+
+**Evaluation:** `scripts/run_eval_queries.py` runs end-to-end through BM25 + Anthropic on eval and test sets, reporting per-qtype guardrail pass rates and answer overlap.
+
 ---
 
 ## Project Structure
@@ -82,26 +124,47 @@ medical-education-rag/
 |   |-- embeddings/
 |   |   |-- vector_store.py         # Pinecone serverless wrapper
 |   |   |-- recommender.py          # Content recommendation engine
-|   |-- retrieval/                   # Phase 3: reranker, hybrid search, query expansion
-|   |-- generation/                  # Phase 3-4: RAG chain, prompts, guardrails
-|   |-- prediction/                  # Phase 4: at-risk learner model
-|   |-- api/                         # Phase 3: FastAPI application
+|   |-- retrieval/
+|   |   |-- reranker.py             # Cross-encoder reranker (ms-marco-MiniLM)
+|   |   |-- hybrid_search.py        # BM25 + Pinecone with RRF fusion
+|   |   |-- query_expander.py       # LLM-powered query diversification
+|   |   |-- quality_predictor.py    # Lightweight relevance scorer (distilled)
+|   |-- generation/
+|   |   |-- rag_chain.py            # End-to-end RAG pipeline orchestration
+|   |   |-- llm_client.py           # Claude Haiku 4.5 wrapper
+|   |   |-- prompts.py              # Education-specific prompt templates
+|   |   |-- guardrails.py           # 5-check response validation
+|   |-- prediction/
+|   |   |-- at_risk_model.py        # GBM at-risk learner classifier
+|   |-- api/
+|   |   |-- main.py                 # FastAPI with /ask, /recommend, /health
+|   |   |-- models.py               # Pydantic request/response schemas
+|   |   |-- monitoring.py           # QueryMetrics latency and quality tracking
 |
 |-- notebooks/
 |   |-- 01_data_ingestion.ipynb      # Data loading and chunking pipeline
 |   |-- 02_embedding_comparison.ipynb  # Model comparison with MLflow
 |   |-- 02b_build_vector_store.ipynb   # Build Pinecone index
+|   |-- 03_retrieval_experiments.ipynb # Retrieval strategy comparison
+|   |-- 05_predictive_model.ipynb      # At-risk classifier + SHAP
+|   |-- 05b_quality_predictor.ipynb    # Cross-encoder distillation + SHAP
 |
 |-- scripts/
 |   |-- run_ingestion.py             # Data ingestion automation
 |   |-- run_embedding_comparison.py  # Embedding model evaluation
 |   |-- run_build_index.py           # Pinecone index builder
+|   |-- run_eval_queries.py          # End-to-end eval/test set runner
+|
+|-- tests/
+|   |-- test_guardrails.py           # 15 guardrail validation tests
+|   |-- test_api.py                  # 8 FastAPI endpoint tests
+|   |-- test_quality_predictor.py    # 5 quality predictor tests
+|   |-- test_retrieval.py            # 4 reranker tests
 |
 |-- agents/                          # Phase validation agents and workflow prompts
 |-- commands/                        # Claude Code slash commands (GSD, RALF)
 |-- data/processed/                  # Parquet output files
 |-- docs/                            # Executive reports and interview prep
-|-- tests/                           # Phase 4: pytest suite
 ```
 
 ---
@@ -159,6 +222,15 @@ python agents/phase1_ingestion.py
 
 # Check Phase 2 (9 checks)
 python agents/phase2_embeddings.py
+
+# Check Phase 3
+python agents/phase3_rag_api.py
+
+# Check Phase 4
+python agents/phase4_guardrails_tests.py
+
+# Run test suite
+pytest tests/ -v
 
 # Check all phases
 python agents/run_all.py
