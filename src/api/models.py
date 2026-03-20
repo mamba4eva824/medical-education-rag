@@ -26,6 +26,8 @@ class ValidationResult(BaseModel):
     has_citations: bool
     within_scope: bool
     source_grounded: bool
+    not_empty: bool
+    no_hallucinated_citations: bool
     passed: bool
 
 
