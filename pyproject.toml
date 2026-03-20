@@ -17,6 +17,7 @@ dependencies = [
     "rank-bm25>=0.2.2",
 
     # LLM clients
+    "anthropic>=0.40.0",
     "groq>=0.9.0",
     "langchain>=0.2.0",
     "langchain-text-splitters>=0.2.0",
