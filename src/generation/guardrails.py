@@ -44,24 +44,38 @@ def _check_within_scope(response: str) -> bool:
     return not any(phrase in lower for phrase in PROHIBITED_PHRASES)
 
 
+def _extract_citing_sentence(response: str, citation: str) -> str:
+    """Extract the sentence containing a citation marker."""
+    # Split on sentence boundaries, find the one with the citation
+    sentences = re.split(r"(?<=[.!?])\s+", response)
+    for sentence in sentences:
+        if citation in sentence:
+            return sentence
+    return response
+
+
 def _check_source_grounded(response: str, sources: list[dict]) -> bool:
-    """Verify each citation's surrounding text overlaps >= 30% with the source."""
+    """Verify each citation's surrounding sentence overlaps >= 30% with the source."""
     indices = _extract_citation_indices(response)
     if not indices:
         return False
 
-    for idx in indices:
+    valid_checks = 0
+    for idx in set(indices):
         if idx < 1 or idx > len(sources):
             continue
         source_text = sources[idx - 1].get("doc", sources[idx - 1]).get("text", "")
         source_tokens = _token_set(source_text)
-        response_tokens = _token_set(response)
-        if not response_tokens:
+        # Compare the citing sentence, not the whole response
+        citing_sentence = _extract_citing_sentence(response, f"[{idx}]")
+        sentence_tokens = _token_set(citing_sentence)
+        if not sentence_tokens:
             return False
-        overlap = len(response_tokens & source_tokens) / len(response_tokens)
+        overlap = len(sentence_tokens & source_tokens) / len(sentence_tokens)
         if overlap < SOURCE_GROUNDING_THRESHOLD:
             return False
-    return True
+        valid_checks += 1
+    return valid_checks > 0
 
 
 def _check_no_hallucinated_citations(response: str, n_sources: int) -> bool:
