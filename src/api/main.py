@@ -18,14 +18,14 @@ from src.api.models import (
 logger = logging.getLogger(__name__)
 
 # Global references set during startup
-pipeline = None
+pipelines: dict = {}
 recommender = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load models and initialize pipeline on startup."""
-    global pipeline, recommender
+    """Load models and initialize pipelines on startup."""
+    global pipelines, recommender
     logger.info("Starting up — loading models and data...")
 
     from src.embeddings.recommender import ContentRecommender
@@ -34,18 +34,36 @@ async def lifespan(app: FastAPI):
     from src.generation.rag_chain import RAGPipeline
     from src.retrieval.hybrid_search import HybridSearcher
     from src.retrieval.reranker import Reranker
+    from src.retrieval.strategies import (
+        DenseRetrievalStrategy,
+        HybridRetrievalStrategy,
+    )
 
     store = VectorStore()
     searcher = HybridSearcher(vector_store=store)
     reranker = Reranker()
     llm = LLMClient()
 
-    pipeline = RAGPipeline(
-        searcher=searcher, reranker=reranker, llm_client=llm,
+    # Build strategies — DenseRetrievalStrategy shares parquet data
+    # already loaded by HybridSearcher (no duplicate load)
+    chunk_lookup = {
+        m["chunk_id"]: m for m in searcher.chunk_metadata
+    }
+    hybrid_strategy = HybridRetrievalStrategy(searcher=searcher, llm_client=llm)
+    dense_strategy = DenseRetrievalStrategy(
+        vector_store=store, chunk_lookup=chunk_lookup,
     )
+
+    pipelines["full"] = RAGPipeline(
+        strategy=hybrid_strategy, reranker=reranker, llm_client=llm,
+    )
+    pipelines["simple"] = RAGPipeline(
+        strategy=dense_strategy, reranker=reranker, llm_client=llm,
+    )
+
     recommender = ContentRecommender(vector_store=store)
 
-    logger.info("Startup complete.")
+    logger.info("Startup complete — full and simple pipelines ready.")
     yield
     logger.info("Shutting down.")
 
@@ -62,7 +80,14 @@ async def ask(request: QueryRequest):
     """Answer a medical education question using RAG."""
     start = time.time()
     try:
-        result = pipeline.answer(
+        pipe = pipelines.get(request.mode)
+        if pipe is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown mode '{request.mode}'. Use 'full' or 'simple'.",
+            )
+
+        result = pipe.answer(
             query=request.question, top_k=request.top_k,
         )
         latency = time.time() - start
@@ -80,8 +105,8 @@ async def ask(request: QueryRequest):
         validation = ValidationResult(**result["validation"])
 
         logger.info(
-            f"query={request.question[:50]} latency={latency:.3f}s "
-            f"passed={validation.passed}"
+            f"mode={request.mode} query={request.question[:50]} "
+            f"latency={latency:.3f}s passed={validation.passed}"
         )
 
         return QueryResponse(
@@ -89,7 +114,12 @@ async def ask(request: QueryRequest):
             sources=sources,
             validation=validation,
             latency_ms=latency * 1000,
+            pipeline_mode=result["pipeline_mode"],
+            timing=result["timing"],
+            api_calls=result["api_calls"],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error processing query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -111,5 +141,5 @@ async def health():
     """Health check endpoint."""
     return {
         "status": "ok",
-        "pipeline_loaded": pipeline is not None,
+        "pipeline_loaded": len(pipelines) > 0,
     }

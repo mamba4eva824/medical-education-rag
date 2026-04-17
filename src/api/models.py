@@ -9,6 +9,7 @@ class QueryRequest(BaseModel):
     question: str = Field(..., min_length=3, max_length=1000)
     top_k: int = Field(default=5, ge=1, le=20)
     specialty: str | None = None
+    mode: str = Field(default="full", pattern="^(full|simple)$")
 
 
 class Source(BaseModel):
@@ -38,6 +39,9 @@ class QueryResponse(BaseModel):
     sources: list[Source]
     validation: ValidationResult
     latency_ms: float
+    pipeline_mode: str = "full"
+    timing: dict[str, float] = Field(default_factory=dict)
+    api_calls: dict[str, int] = Field(default_factory=dict)
 
 
 class RecommendRequest(BaseModel):

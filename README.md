@@ -2,7 +2,7 @@
 
 A retrieval-augmented generation (RAG) pipeline for medical education, built as a portfolio project for the Applied AI Engineer role at Vanderbilt University School of Medicine.
 
-The system ingests authoritative medical Q&A content, chunks it for semantic retrieval, and will power an intelligent tutoring chatbot with citation-backed answers, content recommendations, and guardrails appropriate for medical education.
+The system ingests authoritative medical Q&A content, chunks it for semantic retrieval, and powers an intelligent tutoring chatbot with citation-backed answers, content recommendations, and guardrails appropriate for medical education.
 
 ---
 
@@ -12,26 +12,67 @@ The system ingests authoritative medical Q&A content, chunks it for semantic ret
 |-------|-------------|--------|
 | 1 | Data Ingestion and Chunking | Complete |
 | 2 | Embeddings, Vector Store, and Recommendations | Complete |
-| 3 | RAG Architecture, Retrieval ML, and API | Planned |
-| 4 | Guardrails, Predictive Models, and Tests | Planned |
-| 5 | Databricks Porting | Planned |
+| 3 | RAG Architecture, Retrieval ML, and API | Complete |
+| 4 | Guardrails, Predictive Models, and Tests | Complete |
+| 5 | A/B Pipeline Comparison and Evaluation | Complete |
+| 6 | Databricks Porting | Planned |
 
 ---
 
 ## Architecture
 
 ```
-MedQuAD (NIH)                 Embedding Models              LLM (Groq/Claude)
+MedQuAD (NIH)                 Embedding Models              LLM (Claude Haiku 4.5)
      |                              |                              |
      v                              v                              v
- MedQuADLoader ──> MedicalChunker ──> Pinecone ──> HybridSearch ──> RAGPipeline
-     |                                    |              |              |
-     v                                    v              v              v
- eval/test split              VectorStore + BM25    Reranker      Guardrails
-                                                                      |
-                                                                      v
-                                                              FastAPI (/ask, /recommend)
+ MedQuADLoader ──> MedicalChunker ──> Pinecone ──> RetrievalStrategy ──> RAGPipeline
+     |                                    |              |                    |
+     v                                    v              v                    v
+ eval/test split              VectorStore + BM25    Reranker             Guardrails
+                                                                             |
+                                                                             v
+                                                                     FastAPI (/ask, /recommend)
+                                                                             |
+                                                                             v
+                                                                     A/B Eval Harness + MLflow
 ```
+
+### Strategy Pattern (A/B Pipeline)
+
+The pipeline uses a pluggable `RetrievalStrategy` to support two modes:
+
+| | Full Pipeline | Simple Pipeline |
+|---|---|---|
+| Query expansion | Claude generates 3 alternatives | None |
+| Retrieval | BM25 + Pinecone dense, RRF fusion | Pinecone dense only |
+| LLM calls/query | 2 (expand + generate) | 1 (generate only) |
+| Pinecone calls/query | 4 (one per expanded query) | 1 |
+| Reranking | Cross-encoder (same) | Cross-encoder (same) |
+| Mean latency | ~6s | ~3.5s |
+
+Switch modes at runtime via the API's `mode` parameter.
+
+---
+
+## Retrieval Accuracy
+
+Evaluated on two test sets to measure different capabilities. See [docs/retrieval_accuracy_changelog.md](docs/retrieval_accuracy_changelog.md) for the full evolution.
+
+### Indexed Eval (answers in vector DB) — tests retrieval quality
+
+| Pipeline | Precision@5 | MRR | Answer Overlap | Guardrail Pass |
+|----------|:-----------:|:---:|:--------------:|:--------------:|
+| **Full** | **0.380**   | **0.800** | **50.0%** | 100% |
+| Simple   | 0.220       | 0.433 | 26.3%          | 90%  |
+
+### Held-Out Eval (answers not in vector DB) — tests graceful degradation
+
+| Pipeline | Precision@5 | MRR | Answer Overlap | Guardrail Pass |
+|----------|:-----------:|:---:|:--------------:|:--------------:|
+| Full     | 0.120       | 0.237 | 24.8%        | 100% |
+| Simple   | 0.160       | 0.258 | 20.1%        | 100% |
+
+**Key finding**: When content exists in the index, MRR=0.800 means the correct chunk ranks in position 1-2. The full pipeline earns its extra cost with +73% precision and +85% MRR over simple. On held-out questions (content not indexed), both pipelines perform similarly — the accuracy gap is entirely explained by content availability.
 
 ---
 
@@ -41,33 +82,45 @@ MedQuAD (NIH)                 Embedding Models              LLM (Groq/Claude)
 
 **Dataset:** MedQuAD -- 16,407 medical Q&A pairs from 12 NIH institutes, loaded via HuggingFace.
 
-**Data pipeline:**
-- Loads and deduplicates the dataset
-- Produces a three-way stratified split: 15,117 documents for indexing, 500 eval pairs for development, 200 test pairs for final metrics
-- Applies Q&A-aware adaptive chunking: short answers (under 1,000 characters) stay intact as single chunks with the question embedded in the text; long answers split at paragraph boundaries with the original question preserved in metadata
-- Outputs 30,198 retrieval-ready chunks with structured metadata (question, topic category, source, position)
-
-**Key design decisions:**
-- Three-way split prevents data leakage: the quality predictor (Phase 4) trains on eval queries, so test queries remain sealed for unbiased final metrics
-- Chunk IDs are deterministic MD5 hashes of question + text, ensuring reproducibility across runs
-- Every chunk carries its original question as metadata, enabling hybrid retrieval against both question and answer text
+- Three-way stratified split: 15,117 documents for indexing, 500 eval pairs for development, 200 test pairs for final metrics
+- Q&A-aware adaptive chunking: short answers stay intact, long answers split at paragraph boundaries with the original question preserved
+- 35,886 retrieval-ready chunks with structured metadata
 
 ### Phase 2: Embeddings, Vector Store, and Recommendations
 
-**Embedding models evaluated:** Three HuggingFace models compared using local cosine similarity on a 2,000-chunk sample, with metrics logged to MLflow.
+Three HuggingFace embedding models compared with MLflow tracking. PubMedBert selected for domain specialization in medical content.
 
-| Model | P@5 | MRR | Encoding Time | Dimensions |
-|-------|-----|-----|---------------|------------|
-| all-MiniLM-L6-v2 | 0.070 | 0.117 | 6.4s | 384 |
-| pritamdeka/S-PubMedBert-MS-MARCO | 0.062 | 0.126 | 21.3s | 768 |
-| all-mpnet-base-v2 | 0.090 | 0.169 | 183.7s | 768 |
+| Model | P@5 | MRR | Dimensions |
+|-------|-----|-----|------------|
+| all-MiniLM-L6-v2 | 0.070 | 0.117 | 384 |
+| pritamdeka/S-PubMedBert-MS-MARCO | 0.062 | 0.126 | 768 |
+| all-mpnet-base-v2 | 0.090 | 0.169 | 768 |
 
-**Vector store:** PubMedBert selected for domain specialization in medical content. 10,763 vectors indexed in Pinecone serverless (30% sample, cosine metric).
+35,886 vectors indexed in Pinecone serverless (cosine metric, AWS us-east-1).
 
-**Components built:**
-- `VectorStore` -- Pinecone wrapper with batch upsert, retry logic, and post-upsert count verification
-- `ContentRecommender` -- similarity search and personalized study path recommendations
-- MLflow experiment tracking with 3 model comparison runs
+### Phase 3: RAG Architecture, Retrieval, and API
+
+- **Hybrid search**: BM25 sparse + Pinecone dense retrieval with Reciprocal Rank Fusion (k=60)
+- **Cross-encoder reranking**: `cross-encoder/ms-marco-MiniLM-L-6-v2` for two-stage retrieval
+- **Query expansion**: Claude Haiku generates 3 alternative queries per search
+- **FastAPI**: `/ask`, `/recommend`, `/health` endpoints with latency tracking
+- **Guardrails**: Citation validation, scope checking, source grounding (30% token overlap threshold)
+
+### Phase 4: Guardrails, Predictive Models, and Tests
+
+- **5-point guardrail validation**: has_citations, within_scope, not_empty, source_grounded, no_hallucinated_citations
+- **At-risk learner prediction**: GradientBoostingClassifier on synthetic student data with SHAP explanations
+- **Retrieval quality prediction**: GradientBoostingRegressor trained via cross-encoder distillation
+- **Query monitoring**: p50/p95 latency tracking, guardrail failure rate, empty result rate
+- **Test suite**: 28 tests passing (pytest) — API, guardrails, reranker, quality predictor, strategies
+
+### Phase 5: A/B Pipeline Comparison and Evaluation
+
+- **Strategy pattern**: `RetrievalStrategy` Protocol with `HybridRetrievalStrategy` and `DenseRetrievalStrategy`
+- **Per-component timing**: retrieval, reranking, and generation measured separately
+- **Evaluation harness**: precision@5, MRR, answer token overlap, guardrail pass rate, MLflow logging
+- **Dual eval methodology**: indexed eval (retrieval quality) and held-out eval (graceful degradation)
+- **Shared utilities**: `token_overlap` and `STOP_WORDS` extracted to `src/utils/text.py`
 
 ---
 
@@ -82,26 +135,46 @@ medical-education-rag/
 |   |-- embeddings/
 |   |   |-- vector_store.py         # Pinecone serverless wrapper
 |   |   |-- recommender.py          # Content recommendation engine
-|   |-- retrieval/                   # Phase 3: reranker, hybrid search, query expansion
-|   |-- generation/                  # Phase 3-4: RAG chain, prompts, guardrails
-|   |-- prediction/                  # Phase 4: at-risk learner model
-|   |-- api/                         # Phase 3: FastAPI application
+|   |-- retrieval/
+|   |   |-- strategies.py           # RetrievalStrategy Protocol + implementations
+|   |   |-- hybrid_search.py        # BM25 + dense retrieval with RRF fusion
+|   |   |-- reranker.py             # Cross-encoder reranking
+|   |   |-- query_expander.py       # LLM-powered query expansion
+|   |   |-- quality_predictor.py    # Retrieval quality regression model
+|   |-- generation/
+|   |   |-- rag_chain.py            # RAGPipeline with strategy pattern
+|   |   |-- llm_client.py           # Claude Haiku 4.5 wrapper
+|   |   |-- prompts.py              # Prompt templates
+|   |   |-- guardrails.py           # 5-point response validation
+|   |-- evaluation/
+|   |   |-- eval_harness.py         # A/B evaluation with MLflow logging
+|   |-- prediction/
+|   |   |-- at_risk_model.py        # At-risk learner classifier
+|   |-- api/
+|   |   |-- main.py                 # FastAPI with mode switching
+|   |   |-- models.py               # Pydantic request/response schemas
+|   |   |-- monitoring.py           # Query metrics collection
+|   |-- utils/
+|   |   |-- text.py                 # Shared token overlap utilities
 |
 |-- notebooks/
-|   |-- 01_data_ingestion.ipynb      # Data loading and chunking pipeline
-|   |-- 02_embedding_comparison.ipynb  # Model comparison with MLflow
-|   |-- 02b_build_vector_store.ipynb   # Build Pinecone index
+|   |-- 01_data_ingestion.ipynb
+|   |-- 02_embedding_comparison.ipynb
+|   |-- 02b_build_vector_store.ipynb
+|   |-- 05_predictive_model.ipynb
+|   |-- 05b_quality_predictor.ipynb
+|   |-- 06_ab_pipeline_comparison.ipynb
 |
 |-- scripts/
 |   |-- run_ingestion.py             # Data ingestion automation
 |   |-- run_embedding_comparison.py  # Embedding model evaluation
 |   |-- run_build_index.py           # Pinecone index builder
+|   |-- run_ab_evaluation.py         # A/B pipeline comparison CLI
 |
-|-- agents/                          # Phase validation agents and workflow prompts
-|-- commands/                        # Claude Code slash commands (GSD, RALF)
+|-- tests/                           # 28 tests: API, guardrails, strategies, models
+|-- agents/                          # Phase validation agents
+|-- docs/                            # Executive reports, accuracy changelog
 |-- data/processed/                  # Parquet output files
-|-- docs/                            # Executive reports and interview prep
-|-- tests/                           # Phase 4: pytest suite
 ```
 
 ---
@@ -132,36 +205,40 @@ Copy the environment template and add your API keys:
 cp .env.example .env
 ```
 
-Required keys (for Phases 2+):
-
 | Key | Source | Purpose |
 |-----|--------|---------|
-| GROQ_API_KEY | groq.com | LLM inference for query expansion and generation |
-| ANTHROPIC_API_KEY | console.anthropic.com | Optional Claude backend |
-| HF_TOKEN | huggingface.co | Optional for gated model access |
+| ANTHROPIC_API_KEY | console.anthropic.com | LLM inference (Claude Haiku 4.5) |
 | PINECONE_API_KEY | pinecone.io | Vector database for semantic search |
+| HF_TOKEN | huggingface.co | Optional for gated model access |
 
-### Running the Pipeline
-
-The processed data files are included in the repository. To regenerate from scratch:
+### Running
 
 ```bash
-python scripts/run_ingestion.py
+# Start the API
+uvicorn src.api.main:app --reload --port 8000
+
+# Run tests
+pytest tests/ -v
+
+# Run A/B evaluation
+python scripts/run_ab_evaluation.py --n-queries 10
+
+# View MLflow experiments
+mlflow ui --port 5000
 ```
 
-### Validation
-
-Each phase has an automated validation agent:
+### API Usage
 
 ```bash
-# Check Phase 1 (13 checks)
-python agents/phase1_ingestion.py
+# Full pipeline (query expansion + hybrid search)
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the symptoms of heart failure?", "mode": "full"}'
 
-# Check Phase 2 (9 checks)
-python agents/phase2_embeddings.py
-
-# Check all phases
-python agents/run_all.py
+# Simple pipeline (dense-only, faster)
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the symptoms of heart failure?", "mode": "simple"}'
 ```
 
 ---
@@ -174,21 +251,21 @@ This project is structured around the two core pillars of the Applied AI Enginee
 
 | Responsibility | Project Component |
 |----------------|-------------------|
-| Semantic search and content recommendations | Vector store with filtered retrieval (Phase 2) |
-| RAG architectures and LLM orchestration | Full RAG chain with query expansion (Phase 3) |
-| Backend services and APIs | FastAPI with /ask, /recommend, /health (Phase 3) |
-| Vendor vs. open-source evaluation | Embedding model comparison with MLflow (Phase 2) |
-| Responsible AI and guardrails | Content filtering and citation validation (Phase 4) |
+| Semantic search and content recommendations | Vector store with filtered retrieval, ContentRecommender |
+| RAG architectures and LLM orchestration | Strategy pattern with pluggable retrieval, full RAG chain |
+| Backend services and APIs | FastAPI with mode switching, latency tracking |
+| Vendor vs. open-source evaluation | Embedding model comparison + A/B pipeline comparison with MLflow |
+| Responsible AI and guardrails | 5-point validation, citation checking, scope enforcement |
 
 ### ML Engineering and Production Systems
 
 | Responsibility | Project Component |
 |----------------|-------------------|
-| ML pipelines in Databricks | Delta tables and ported experiments (Phase 5) |
-| Deployment with monitoring | Query metrics, latency tracking, error handling (Phase 4) |
-| MLOps practices | Version control, pytest suite, MLflow tracking (Phase 4) |
-| Predictive modeling | At-risk learner classifier and retrieval quality predictor (Phase 4) |
-| Full lifecycle management | Model Registry stages in Databricks (Phase 5) |
+| ML pipelines in Databricks | Delta tables and ported experiments (Phase 6) |
+| Deployment with monitoring | Query metrics, latency tracking, error handling |
+| MLOps practices | 28 pytest tests, MLflow tracking, reproducible evaluation |
+| Predictive modeling | At-risk learner classifier, retrieval quality predictor, SHAP explanations |
+| Full lifecycle management | Model Registry stages in Databricks (Phase 6) |
 
 ---
 
@@ -198,8 +275,6 @@ This project uses two Claude Code slash commands for structured development:
 
 - `/gsd` -- Planning workflow: audit, acceptance criteria, alternatives analysis, challenger review, user approval
 - `/ralf` -- Execution workflow: implement, verify (automated gates), review (semantic check), learn, complete
-
-Phase validation agents run automatically during the verify step to ensure correctness before marking tasks complete.
 
 ---
 

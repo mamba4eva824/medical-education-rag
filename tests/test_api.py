@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client(mock_pipeline_result):
     """Create a test client with mocked pipeline and recommender."""
-    # Mock the pipeline
+    # Mock the pipeline (used for both "full" and "simple" modes)
     mock_pipe = MagicMock()
     mock_pipe.answer.return_value = mock_pipeline_result
 
@@ -18,7 +18,8 @@ def client(mock_pipeline_result):
     mock_rec.get_similar.return_value = [{"text": "rec1", "score": 0.9}]
 
     # Patch globals before importing app
-    with patch("src.api.main.pipeline", mock_pipe), \
+    mock_pipelines = {"full": mock_pipe, "simple": mock_pipe}
+    with patch("src.api.main.pipelines", mock_pipelines), \
          patch("src.api.main.recommender", mock_rec):
         from src.api.main import app
         # Override lifespan to avoid loading real models

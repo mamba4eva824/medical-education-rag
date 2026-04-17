@@ -32,4 +32,7 @@ def mock_pipeline_result():
             "passed": True,
         },
         "expanded_queries": ["heart failure symptoms"],
+        "pipeline_mode": "full",
+        "timing": {"retrieval_s": 0.5, "rerank_s": 0.1, "generation_s": 1.2},
+        "api_calls": {"llm_calls": 1, "pinecone_calls": 4, "reranker_calls": 1},
     }
