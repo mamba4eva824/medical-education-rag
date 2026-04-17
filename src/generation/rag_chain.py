@@ -2,6 +2,7 @@
 
 import logging
 
+from src.generation.guardrails import validate_response
 from src.generation.llm_client import LLMClient
 from src.generation.prompts import EDUCATION_QA_PROMPT
 from src.retrieval.hybrid_search import HybridSearcher
@@ -74,17 +75,12 @@ class RAGPipeline:
         sources = [r["doc"] for r in reranked]
         scores = [r["rerank_score"] for r in reranked]
 
+        validation = validate_response(response, reranked)
+
         return {
             "answer": response,
             "sources": sources,
             "scores": scores,
-            "validation": {
-                "has_citations": any(
-                    f"[{i}]" in response for i in range(1, len(sources) + 1)
-                ),
-                "within_scope": True,
-                "source_grounded": True,
-                "passed": True,
-            },
+            "validation": validation,
             "expanded_queries": queries,
         }
