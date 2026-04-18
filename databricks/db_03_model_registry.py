@@ -135,11 +135,15 @@ with mlflow.start_run(run_name="at_risk_gbm") as run:
         "f1_std": float(cv_scores.std()),
     })
 
-    # Log and register model
+    # Log and register model with signature (required by Unity Catalog)
+    from mlflow.models import infer_signature
+    signature = infer_signature(X, pipeline.predict(X))
+
     mlflow.sklearn.log_model(
         pipeline,
         artifact_path="at_risk_model",
         registered_model_name=REGISTERED_MODEL_NAME,
+        signature=signature,
     )
 
     print(f"Run ID: {run.info.run_id}")

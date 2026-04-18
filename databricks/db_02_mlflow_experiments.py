@@ -78,6 +78,10 @@ eval_sdf = spark.table(f"{CATALOG}.{SCHEMA}.eval_queries")
 chunks_pdf = chunks_sdf.toPandas()
 eval_pdf = eval_sdf.toPandas()
 
+# Filter out any None/NaN values from CSV round-trip
+chunks_pdf = chunks_pdf.dropna(subset=["text"])
+eval_pdf = eval_pdf.dropna(subset=["question", "answer"])
+
 chunk_texts = chunks_pdf["text"].tolist()
 eval_questions = eval_pdf["question"].tolist()[:100]  # Sample for speed
 eval_answers = eval_pdf["answer"].tolist()[:100]
